@@ -32,6 +32,9 @@ def extract_audio():
             "yt-dlp",
             "--no-playlist",
             "--no-warnings",
+            "--force-ipv4",
+            "--extractor-args",
+            "youtube:player_client=tv_downgraded,web,android",
             "-x",
             "--audio-format",
             "mp3",
@@ -45,12 +48,17 @@ def extract_audio():
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=95)
 
         if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").lower()
-            if "private" in err or "sign in" in err or "login" in err or "403" in err:
+            raw_err = (result.stderr or result.stdout or "").strip()
+            print("yt-dlp error:", raw_err, flush=True)
+            err_lower = raw_err.lower()
+            if "confirm you're not a bot" in err_lower or "sign in" in err_lower or "login" in err_lower:
+                return jsonify({"error": "YouTube/platform requested sign-in (bot check on cloud server)."}), 403
+            if "private" in err_lower or "403" in err_lower:
                 return jsonify({"error": "This video is private or restricted and cannot be imported."}), 403
-            if "unavailable" in err or "not found" in err or "404" in err:
+            if "unavailable" in err_lower or "not found" in err_lower or "404" in err_lower:
                 return jsonify({"error": "Video or audio source was not found or is unavailable."}), 404
-            return jsonify({"error": "Could not extract audio from this link."}), 422
+            last_line = raw_err.splitlines()[-1] if raw_err else "Unknown extraction error"
+            return jsonify({"error": f"Extraction failed: {last_line[:180]}"}), 422
 
         mp3_path = os.path.join(tmpdir, "audio.mp3")
         if not os.path.exists(mp3_path):
@@ -73,7 +81,8 @@ def extract_audio():
         )
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Audio extraction timed out. Try a shorter video."}), 504
-    except Exception:
-        return jsonify({"error": "Unexpected server error while extracting audio."}), 500
+    except Exception as exc:
+        print("Server error:", repr(exc), flush=True)
+        return jsonify({"error": f"Unexpected server error: {str(exc)[:150]}"}), 500
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
