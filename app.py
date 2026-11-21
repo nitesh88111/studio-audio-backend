@@ -11,6 +11,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 MAX_BYTES = 50 * 1024 * 1024  # 50 MB limit to match frontend
+COOKIES_PATH = "/etc/secrets/cookies.txt"
 
 
 def normalize_youtube_shorts(url: str) -> str:
@@ -26,6 +27,8 @@ def run_yt_dlp(url: str, output_template: str, extra_args=None):
         "--no-playlist",
         "--no-warnings",
         "--force-ipv4",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "-x",
         "--audio-format",
         "mp3",
@@ -34,6 +37,8 @@ def run_yt_dlp(url: str, output_template: str, extra_args=None):
         "-o",
         output_template,
     ]
+    if os.path.exists(COOKIES_PATH):
+        cmd.extend(["--cookies", COOKIES_PATH])
     if extra_args:
         cmd.extend(extra_args)
     cmd.append(url)
@@ -42,7 +47,11 @@ def run_yt_dlp(url: str, output_template: str, extra_args=None):
 
 @app.get("/")
 def health():
-    return jsonify({"status": "ok", "service": "Studio.2.O Audio Backend"})
+    return jsonify({
+        "status": "ok",
+        "service": "Studio.2.O Audio Backend",
+        "cookies_loaded": os.path.exists(COOKIES_PATH),
+    })
 
 
 @app.post("/extract-audio")
