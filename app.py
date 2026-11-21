@@ -21,7 +21,7 @@ def normalize_youtube_shorts(url: str) -> str:
     return url
 
 
-def run_yt_dlp(url: str, output_template: str, extra_args=None):
+def run_yt_dlp(url: str, output_template: str, cookies_file=None, extra_args=None):
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -37,8 +37,8 @@ def run_yt_dlp(url: str, output_template: str, extra_args=None):
         "-o",
         output_template,
     ]
-    if os.path.exists(COOKIES_PATH):
-        cmd.extend(["--cookies", COOKIES_PATH])
+    if cookies_file:
+        cmd.extend(["--cookies", cookies_file])
     if extra_args:
         cmd.extend(extra_args)
     cmd.append(url)
@@ -67,15 +67,21 @@ def extract_audio():
     try:
         output_template = os.path.join(tmpdir, "audio.%(ext)s")
 
+        cookies_file = None
+        if os.path.exists(COOKIES_PATH):
+            cookies_file = os.path.join(tmpdir, "cookies.txt")
+            shutil.copy2(COOKIES_PATH, cookies_file)
+
         # Try default yt-dlp clients first
-        result = run_yt_dlp(url, output_template)
+        result = run_yt_dlp(url, output_template, cookies_file=cookies_file)
 
         # Fallback client if default fails
         if result.returncode != 0:
             result = run_yt_dlp(
                 url,
                 output_template,
-                ["--extractor-args", "youtube:player_client=android,web_embedded"],
+                cookies_file=cookies_file,
+                extra_args=["--extractor-args", "youtube:player_client=android,web_embedded"],
             )
 
         if result.returncode != 0:
