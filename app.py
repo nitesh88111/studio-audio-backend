@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,33 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 MAX_BYTES = 50 * 1024 * 1024  # 50 MB limit to match frontend
+
+
+def normalize_youtube_shorts(url: str) -> str:
+    match = re.match(r"^https?://(?:www\.|m\.)?youtube\.com/shorts/([A-Za-z0-9_-]+)", url)
+    if match:
+        return f"https://www.youtube.com/watch?v={match.group(1)}"
+    return url
+
+
+def run_yt_dlp(url: str, output_template: str, extra_args=None):
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--no-warnings",
+        "--force-ipv4",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "192K",
+        "-o",
+        output_template,
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.append(url)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=95)
 
 
 @app.get("/")
@@ -25,34 +53,28 @@ def extract_audio():
     if not url.startswith(("http://", "https://")):
         return jsonify({"error": "Please provide a valid http:// or https:// URL."}), 400
 
+    url = normalize_youtube_shorts(url)
     tmpdir = tempfile.mkdtemp(prefix="studio_audio_")
     try:
         output_template = os.path.join(tmpdir, "audio.%(ext)s")
-        cmd = [
-            "yt-dlp",
-            "--no-playlist",
-            "--no-warnings",
-            "--force-ipv4",
-            "--extractor-args",
-            "youtube:player_client=tv_downgraded,web,android",
-            "-x",
-            "--audio-format",
-            "mp3",
-            "--audio-quality",
-            "192K",
-            "-o",
-            output_template,
-            url,
-        ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=95)
+        # Try default yt-dlp clients first
+        result = run_yt_dlp(url, output_template)
+
+        # Fallback client if default fails
+        if result.returncode != 0:
+            result = run_yt_dlp(
+                url,
+                output_template,
+                ["--extractor-args", "youtube:player_client=android,web_embedded"],
+            )
 
         if result.returncode != 0:
             raw_err = (result.stderr or result.stdout or "").strip()
             print("yt-dlp error:", raw_err, flush=True)
             err_lower = raw_err.lower()
             if "confirm you're not a bot" in err_lower or "sign in" in err_lower or "login" in err_lower:
-                return jsonify({"error": "YouTube/platform requested sign-in (bot check on cloud server)."}), 403
+                return jsonify({"error": "Platform requested sign-in (bot check on cloud server)."}), 403
             if "private" in err_lower or "403" in err_lower:
                 return jsonify({"error": "This video is private or restricted and cannot be imported."}), 403
             if "unavailable" in err_lower or "not found" in err_lower or "404" in err_lower:
