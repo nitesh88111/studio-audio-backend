@@ -1,3 +1,4 @@
+import glob
 import io
 import os
 import re
@@ -27,13 +28,12 @@ def run_yt_dlp(url: str, output_template: str, cookies_file=None, extra_args=Non
         "--no-playlist",
         "--no-warnings",
         "--force-ipv4",
+        "--concurrent-fragments",
+        "4",
         "--user-agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "-x",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "192K",
+        "-f",
+        "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
         "-o",
         output_template,
     ]
@@ -97,24 +97,49 @@ def extract_audio():
             last_line = raw_err.splitlines()[-1] if raw_err else "Unknown extraction error"
             return jsonify({"error": f"Extraction failed: {last_line[:180]}"}), 422
 
-        mp3_path = os.path.join(tmpdir, "audio.mp3")
-        if not os.path.exists(mp3_path):
+        downloaded = [p for p in glob.glob(os.path.join(tmpdir, "audio.*")) if not p.endswith(".part")]
+        if not downloaded:
             return jsonify({"error": "No playable audio stream was found."}), 422
 
-        size = os.path.getsize(mp3_path)
+        audio_path = downloaded[0]
+        ext = os.path.splitext(audio_path)[1].lower()
+
+        if ext == ".m4a":
+            final_path = audio_path
+            mimetype = "audio/mp4"
+            download_name = "extracted.m4a"
+        elif ext == ".mp3":
+            final_path = audio_path
+            mimetype = "audio/mpeg"
+            download_name = "extracted.mp3"
+        else:
+            # Convert non-M4A/non-MP3 formats (e.g. mp4/webm) to MP3
+            final_path = os.path.join(tmpdir, "converted.mp3")
+            ff = subprocess.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-vn", "-b:a", "192k", final_path],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if ff.returncode != 0 or not os.path.exists(final_path):
+                return jsonify({"error": "Audio conversion failed."}), 422
+            mimetype = "audio/mpeg"
+            download_name = "extracted.mp3"
+
+        size = os.path.getsize(final_path)
         if size == 0:
             return jsonify({"error": "Extracted audio file is empty."}), 422
         if size > MAX_BYTES:
             return jsonify({"error": "Extracted audio exceeds the 50 MB maximum file size limit."}), 422
 
-        with open(mp3_path, "rb") as f:
+        with open(final_path, "rb") as f:
             audio_bytes = f.read()
 
         return send_file(
             io.BytesIO(audio_bytes),
-            mimetype="audio/mpeg",
+            mimetype=mimetype,
             as_attachment=False,
-            download_name="extracted.mp3",
+            download_name=download_name,
         )
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Audio extraction timed out. Try a shorter video."}), 504
@@ -123,3 +148,6 @@ def extract_audio():
         return jsonify({"error": f"Unexpected server error: {str(exc)[:150]}"}), 500
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+
